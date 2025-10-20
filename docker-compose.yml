@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    container_name: ai_requirement_backend
+    ports:
+      - "8020:8000"
+    env_file:
+      - backend/.env.example
+    volumes:
+      - ./backend:/app
+      - uploads:/tmp/uploads
+    depends_on:
+      - db
+      - redis
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # frontend:
+  #   build: ./frontend
+  #   container_name: ai_requirement_frontend
+  #   ports:
+  #     - "3004:3000"
+  #   depends_on:
+  #     - backend
+  #   environment:
+  #     - VITE_API_URL=http://localhost:8020
+  #   command: npm run dev -- --host
+
+  db:
+    image: postgres:15-alpine
+    container_name: ai_requirement_db
+    environment:
+      - POSTGRES_DB=ai_requirement
+      - POSTGRES_USER=ai_requirement
+      - POSTGRES_PASSWORD=change_me
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: ai_requirement_redis
+    command: redis-server --save '' --appendonly no
+
+volumes:
+  uploads:
+  pgdata:
