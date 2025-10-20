@@ -24,8 +24,14 @@ class Settings(BaseSettings):
 
     # Vision-Language 模型配置（用于图片识别）
     vl_enabled: bool = Field(default=True, alias="VL_ENABLED", description="启用 VL 模型进行图片识别")
+    # VL引擎选择: "paddleocr" (本地推理) 或 "qwen" (在线API)
+    vl_engine: Literal["paddleocr", "qwen"] = Field(
+        default="paddleocr",
+        alias="VL_ENGINE",
+        description="VL引擎: paddleocr (本地) 或 qwen (云端API)"
+    )
     # MultiModalConversation 使用 qwen-vl-* 系列；使用 qwen-vl-plus 模型（更快更稳定）
-    vl_model: str = Field(default="qwen-vl-plus", alias="VL_MODEL", description="VL 模型名称")
+    vl_model: str = Field(default="qwen-vl-plus", alias="VL_MODEL", description="VL 模型名称（qwen引擎）")
     vl_api_key: str | None = Field(default=None, alias="VL_API_KEY", description="VL 模型 API Key，默认使用 QWEN_API_KEY")
     vl_base_url: str | None = Field(default=None, alias="VL_BASE_URL", description="VL 模型 base URL")
 
@@ -134,6 +140,7 @@ class Settings(BaseSettings):
         """获取 VL 模型配置."""
         return {
             "enabled": self.vl_enabled,
+            "engine": self.vl_engine,
             "model": self.vl_model,
             "api_key": self.vl_api_key or self.qwen_api_key,
             "base_url": self.vl_base_url or self.qwen_base_url,
