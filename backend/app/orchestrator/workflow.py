@@ -18,7 +18,6 @@ from app.db import session_repository
 from app.db.base import AsyncSessionLocal
 from app.llm.autogen_runner import AutogenOutputs, run_analysis
 from app.llm.vision_client_enhanced import extract_requirements_with_retry, is_vl_available
-from app.llm import paddleocr_client
 from app.models.document import Document
 from app.models.session import AgentStage, SessionStatus
 from app.parsers.text_extractor import extract_text
@@ -184,41 +183,23 @@ class SessionWorkflowExecution:
         preview_source = "text_extractor"
         preview_text = normalized_text
 
-        vl_engine = self._vl_config.get("engine", "qwen")
-
-        # 选择VL引擎: paddleocr (本地) 或 qwen (云端API)
-        if self._vl_config.get("enabled"):
+        if self._vl_config.get("enabled") and self._vl_config.get("api_key") and is_vl_available():
             image_path, temp_path = self._prepare_document_image(document, normalized_text)
             if image_path is not None:
                 try:
-                    if vl_engine == "paddleocr":
-                        # 使用 PaddleOCR-VL 本地模型
-                        if paddleocr_client.is_paddleocr_available():
-                            logger.info(f"使用 PaddleOCR-VL 引擎处理: {document.original_name}")
-                            vl_text = await paddleocr_client.extract_requirements_from_image_async(
-                                image_path
-                            )
-                            if vl_text and vl_text.strip():
-                                preview_text = vl_text.strip()
-                                preview_source = "paddleocr_vl"
-                        else:
-                            logger.warning("PaddleOCR 不可用，降级使用文本提取")
-                    elif vl_engine == "qwen" and self._vl_config.get("api_key") and is_vl_available():
-                        # 使用 qwen-vl-plus 云端API
-                        logger.info(f"使用 Qwen VL 引擎处理: {document.original_name}")
-                        vl_text = await extract_requirements_with_retry(
-                            image_path,
-                            api_key=self._vl_config.get("api_key"),
-                            model=self._vl_config.get("model"),
-                            base_url=self._vl_config.get("base_url"),
-                            use_cache=True,
-                        )
-                        if vl_text and vl_text.strip():
-                            preview_text = vl_text.strip()
-                            preview_source = "qwen_vl"
+                    vl_text = await extract_requirements_with_retry(
+                        image_path,
+                        api_key=self._vl_config.get("api_key"),
+                        model=self._vl_config.get("model"),
+                        base_url=self._vl_config.get("base_url"),
+                        use_cache=True,
+                    )
+                    if vl_text and vl_text.strip():
+                        preview_text = vl_text.strip()
+                        preview_source = "vl_model"
                 except Exception:
                     logger.warning(
-                        f"VL 版面分析失败（引擎: {vl_engine}），使用文本提取内容。",
+                        "VL 版面分析失败，使用文本提取内容。",
                         exc_info=True,
                     )
                 finally:
@@ -289,15 +270,7 @@ class SessionWorkflowExecution:
             layout_markdown_lines.append(f"### 文档 {idx}: {entry['name']}")
             layout_markdown_lines.append(f"- 字符数：{entry['char_count']}")
             layout_markdown_lines.append(f"- 有效段落数：{entry['line_count']}")
-            # 识别来源标签
-            source = entry.get("source", "text_extractor")
-            source_labels = {
-                "paddleocr_vl": "PaddleOCR-VL (本地模型)",
-                "qwen_vl": "Qwen VL (云端API)",
-                "vl_model": "VL 模型",  # 向后兼容
-                "text_extractor": "文本提取"
-            }
-            source_label = source_labels.get(source, "文本提取")
+            source_label = "VL 模型" if entry.get("source") == "vl_model" else "文本提取"
             layout_markdown_lines.append(f"- 识别来源：{source_label}")
             if entry.get("preview"):
                 layout_markdown_lines.append("")
