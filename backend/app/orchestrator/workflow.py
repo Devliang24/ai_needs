@@ -298,6 +298,11 @@ class SessionWorkflowExecution:
                 str(entry.get("preview", "")) for entry in layout_entries if entry.get("preview")
             )
 
+        # 在开始AI分析前发送进度提示
+        await self._emit_system_message(
+            "开始调用AutoGen智能体进行深度分析，这可能需要30-60秒...",
+            progress=0.18,
+        )
         logger.info("开始调用 AutoGen 进行分析...")
         try:
             outputs = await asyncio.to_thread(run_analysis, documents_text)
@@ -534,8 +539,14 @@ class SessionWorkflowExecution:
                     # 清除确认数据
                     await session_events.clear_confirmation(self.session_id)
 
-                    # 发送系统消息
-                    if stage != AgentStage.test_completion:
+                    # 发送系统消息 - 根据不同阶段提供不同的反馈
+                    if stage == AgentStage.layout_analysis:
+                        # 版面分析阶段确认后,提示用户即将开始AI深度分析
+                        await self._emit_system_message(
+                            "版面分析已确认，正在调用AI进行深度需求分析...",
+                            progress=0.15,
+                        )
+                    elif stage != AgentStage.test_completion:
                         stage_label = self._stage_labels.get(stage, stage.value)
                         await self._emit_system_message(
                             f"{stage_label}阶段已确认，继续执行",

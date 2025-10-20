@@ -478,34 +478,10 @@ const AgentTimeline: React.FC = () => {
     return filteredResults.find(result => result.needsConfirmation && !result.confirmed);
   }, [filteredResults]);
 
-  // 处于“需求分析”编辑态时隐藏滚动条（仅隐藏，不影响滚动能力）
+  // 处于"需求分析"编辑态时隐藏滚动条（仅隐藏，不影响滚动能力）
   const isEditingEditableStage = useMemo(() => {
     return selectedStage != null && EDITABLE_STAGES.has(selectedStage) && editingResultId !== null;
   }, [selectedStage, editingResultId]);
-
-  // 计算分析耗时
-  const analysisDuration = useMemo(() => {
-    if (filteredResults.length === 0) return null;
-
-    const firstResult = filteredResults[0];
-    const lastResult = filteredResults[filteredResults.length - 1];
-
-    // 如果只有一个结果或进度未完成，返回null
-    if (filteredResults.length === 1 || progress < 1.0) {
-      return null;
-    }
-
-    const durationMs = lastResult.timestamp - firstResult.timestamp;
-    const durationSec = Math.floor(durationMs / 1000);
-
-    if (durationSec < 60) {
-      return `${durationSec}秒`;
-    } else {
-      const minutes = Math.floor(durationSec / 60);
-      const seconds = durationSec % 60;
-      return `${minutes}分${seconds}秒`;
-    }
-  }, [filteredResults, progress]);
 
   // 卡片右侧操作按钮
   const cardExtra = useMemo(() => {
@@ -564,50 +540,29 @@ const AgentTimeline: React.FC = () => {
         style={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column' }}
         bodyStyle={{ flex: 1, minHeight: 0, overflow: 'hidden', padding: 0, display: 'flex', flexDirection: 'column' }}
       >
-        <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-          <div
-            className={isEditingEditableStage ? 'no-scrollbar' : undefined}
-            style={{
-              flex: 1,
-              minHeight: 0,
-              overflowY: filteredResults.length === 0 ? 'hidden' : 'auto',
-              overflowX: 'hidden',
-              padding: filteredResults.length === 0 ? '0 24px' : '24px',
-              display: 'flex',
-              alignItems: filteredResults.length === 0 ? 'center' : 'stretch',
-              justifyContent: filteredResults.length === 0 ? 'center' : 'flex-start'
-            }}
-          >
-            {filteredResults.length === 0 ? (
-              showStageLoading ? (
-                <Spin tip="分析中..." size="large" />
-              ) : (
-                <Empty description="该阶段暂无执行结果" image={Empty.PRESENTED_IMAGE_SIMPLE} />
-              )
+        <div
+          className={isEditingEditableStage ? 'no-scrollbar' : undefined}
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: filteredResults.length === 0 ? 'hidden' : 'auto',
+            overflowX: 'hidden',
+            padding: filteredResults.length === 0 ? '0 24px' : '24px',
+            display: 'flex',
+            alignItems: filteredResults.length === 0 ? 'center' : 'stretch',
+            justifyContent: filteredResults.length === 0 ? 'center' : 'flex-start'
+          }}
+        >
+          {filteredResults.length === 0 ? (
+            showStageLoading ? (
+              <Spin tip="分析中..." size="large" />
             ) : (
-              <div style={{ width: '100%' }}>
-                {filteredResults.map(renderTimelineItem)}
-                <div ref={endRef} />
-              </div>
-            )}
-          </div>
-          {analysisDuration && filteredResults.length > 0 && (
-            <div
-              style={{
-                width: 200,
-                borderLeft: '1px solid #f0f0f0',
-                padding: '24px 24px 24px 16px',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8
-              }}
-            >
-              <Typography.Text type="secondary" style={{ fontSize: 14 }}>
-                步骤耗时
-              </Typography.Text>
-              <Typography.Text style={{ fontSize: 20, fontWeight: 600 }}>
-                {analysisDuration}
-              </Typography.Text>
+              <Empty description="该阶段暂无执行结果" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+            )
+          ) : (
+            <div style={{ width: '100%' }}>
+              {filteredResults.map(renderTimelineItem)}
+              <div ref={endRef} />
             </div>
           )}
         </div>
