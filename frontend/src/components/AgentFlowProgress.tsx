@@ -61,12 +61,19 @@ const AgentFlowProgress: React.FC<AgentFlowProgressProps> = ({
       // 检查该阶段是否有结果
       const hasResult = agentResults.some(result => result.stage === stage.key);
 
-      // 如果有结果，显示为完成状态
       if (hasResult) {
+        // 有结果,显示为完成状态
         status = 'finish';
-      } else if (index === currentStepIndex && isConnecting) {
-        // 当前执行的步骤（且正在连接中）
-        status = 'process';
+      } else if (index === currentStepIndex) {
+        // 当前执行的步骤
+        // 判断条件: 1) 是当前阶段 2) 进度在进行中(0 < progress < 1.0)
+        // 这样可以确保在智能体执行期间(15-30秒)持续显示加载状态
+        if (isConnecting || (progress > 0 && progress < 1.0)) {
+          status = 'process';  // 显示加载动画
+        }
+      } else if (index < currentStepIndex && !hasResult) {
+        // 已经跳过但没有结果的步骤(理论上不应该出现,但作为保护)
+        status = 'finish';
       } else {
         // 等待中的步骤
         status = 'wait';
@@ -77,7 +84,7 @@ const AgentFlowProgress: React.FC<AgentFlowProgressProps> = ({
         status
       };
     });
-  }, [agentResults, currentStepIndex, isConnecting]);
+  }, [agentResults, currentStepIndex, isConnecting, progress]);
 
 
   // 处理步骤点击
