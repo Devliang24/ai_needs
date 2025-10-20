@@ -467,11 +467,48 @@ const AgentTimeline: React.FC = () => {
   //   endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   // }, [filteredResults]);
 
-  // 生成标题：显示为“<阶段>步骤结果预览”
+  // 计算分析耗时
+  const analysisDuration = useMemo(() => {
+    if (filteredResults.length === 0) return null;
+
+    const firstResult = filteredResults[0];
+    const lastResult = filteredResults[filteredResults.length - 1];
+
+    // 如果只有一个结果或进度未完成，返回null
+    if (filteredResults.length === 1 || progress < 1.0) {
+      return null;
+    }
+
+    const durationMs = lastResult.timestamp - firstResult.timestamp;
+    const durationSec = Math.floor(durationMs / 1000);
+
+    if (durationSec < 60) {
+      return `${durationSec}秒`;
+    } else {
+      const minutes = Math.floor(durationSec / 60);
+      const seconds = durationSec % 60;
+      return `${minutes}分${seconds}秒`;
+    }
+  }, [filteredResults, progress]);
+
+  // 生成标题：显示为"<阶段>步骤结果预览"，并在右侧显示耗时
   const cardTitle = useMemo(() => {
     const stageLabel = selectedStage ? (stageLabels[selectedStage] || selectedStage) : '';
-    return stageLabel ? `${stageLabel}步骤结果预览` : '步骤结果预览';
-  }, [selectedStage]);
+    const baseTitle = stageLabel ? `${stageLabel}步骤结果预览` : '步骤结果预览';
+
+    if (analysisDuration) {
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <span>{baseTitle}</span>
+          <Typography.Text type="secondary" style={{ fontSize: 14, fontWeight: 'normal' }}>
+            耗时: {analysisDuration}
+          </Typography.Text>
+        </div>
+      );
+    }
+
+    return baseTitle;
+  }, [selectedStage, analysisDuration]);
 
   // 查找当前需要确认的结果
   const pendingConfirmation = useMemo(() => {
