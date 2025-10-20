@@ -16,7 +16,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.cache import session_events
 from app.db import session_repository
 from app.db.base import AsyncSessionLocal
-from app.llm.autogen_runner import AutogenOutputs, run_analysis
+from app.llm.autogen_runner import (
+    AutogenOutputs,
+    run_analysis,
+    run_requirement_analysis,
+    run_test_generation,
+    run_quality_review,
+    run_test_completion,
+    _merge_test_cases,
+)
 from app.llm.vision_client_enhanced import extract_requirements_with_retry, is_vl_available
 from app.models.document import Document
 from app.models.session import AgentStage, SessionStatus
@@ -300,18 +308,107 @@ class SessionWorkflowExecution:
 
         # 在开始AI分析前发送进度提示
         await self._emit_system_message(
-            "开始调用AutoGen智能体进行深度分析，这可能需要30-60秒...",
+            "开始调用AutoGen智能体进行深度分析...",
             progress=0.18,
         )
-        logger.info("开始调用 AutoGen 进行分析...")
+        logger.info("开始逐个调用 AutoGen 智能体...")
+
         try:
-            outputs = await asyncio.to_thread(run_analysis, documents_text)
-            (
-                stage_results,
-                summary,
-                merged_test_cases,
-                metrics,
-            ) = self._from_autogen(outputs)
+            # 1. 需求分析阶段
+            logger.info("执行需求分析智能体...")
+            analysis_payload, analysis_content = await asyncio.to_thread(
+                run_requirement_analysis, documents_text
+            )
+            analysis_result = StageResult(
+                stage=AgentStage.requirement_analysis,
+                sender="需求分析师",
+                content=analysis_content,
+                payload=analysis_payload,
+                progress=0.3,
+            )
+            await self._handle_stage_result(
+                analysis_result,
+                skip_confirmation=False,
+                needs_confirmation=True,
+            )
+
+            # 2. 测试用例生成阶段
+            logger.info("执行测试用例生成智能体...")
+            test_payload, test_content = await asyncio.to_thread(
+                run_test_generation, analysis_payload
+            )
+            def _count_cases(data: dict) -> int:
+                if not isinstance(data, dict):
+                    return 0
+                total = 0
+                for module in data.get("modules", []) or []:
+                    if not isinstance(module, dict):
+                        continue
+                    cases = module.get("cases")
+                    if isinstance(cases, list):
+                        total += sum(1 for case in cases if isinstance(case, dict))
+                return total
+
+            base_case_count = _count_cases(test_payload)
+            test_result = StageResult(
+                stage=AgentStage.test_generation,
+                sender="测试工程师",
+                content=test_content or f"生成测试用例共 {base_case_count} 条",
+                payload=test_payload,
+                progress=0.6,
+            )
+            await self._handle_stage_result(
+                test_result,
+                skip_confirmation=False,
+                needs_confirmation=True,
+            )
+
+            # 3. 质量评审阶段
+            logger.info("执行质量评审智能体...")
+            review_payload, review_content = await asyncio.to_thread(
+                run_quality_review, test_payload
+            )
+            review_result = StageResult(
+                stage=AgentStage.review,
+                sender="质量评审员",
+                content=review_content,
+                payload=review_payload,
+                progress=0.8,
+            )
+            await self._handle_stage_result(
+                review_result,
+                skip_confirmation=False,
+                needs_confirmation=True,
+            )
+
+            # 4. 用例补全阶段
+            logger.info("执行用例补全智能体...")
+            completion_payload, completion_content = await asyncio.to_thread(
+                run_test_completion, analysis_payload, test_payload, review_payload
+            )
+            completion_case_count = _count_cases(completion_payload)
+            completion_result = StageResult(
+                stage=AgentStage.test_completion,
+                sender="测试补全工程师",
+                content=completion_content or f"补充测试用例 {completion_case_count} 条",
+                payload=completion_payload,
+                progress=0.9,
+            )
+            await self._handle_stage_result(
+                completion_result,
+                skip_confirmation=False,
+                needs_confirmation=True,
+            )
+
+            # 5. 合并测试用例
+            logger.info("合并测试用例...")
+            merged_test_cases = _merge_test_cases(test_payload, completion_payload)
+            merged_case_count = _count_cases(merged_test_cases)
+
+            # 准备最终结果
+            summary = analysis_payload
+            metrics = review_payload
+
         except Exception as exc:
             # 当 LLM 出错时，优雅降级：
             # 1) 先把已提取的文档文本（或其节选）作为“需求分析师”的结果发给前端，
@@ -366,13 +463,14 @@ class SessionWorkflowExecution:
             await self.db_session.commit()
             return
 
-        # 为避免前端在收到“完成”阶段事件后立刻导出而数据库结果尚未写入，
-        # 先发送非“完成”阶段事件，然后持久化结果，最后再发送“完成”阶段事件。
-        non_completed = [r for r in stage_results if r.stage != AgentStage.completed]
-        completed_result = next((r for r in stage_results if r.stage == AgentStage.completed), None)
-
-        for result in non_completed:
-            await self._handle_stage_result(result, skip_confirmation=False, needs_confirmation=True)
+        # 发送"完成"阶段事件
+        completed_result = StageResult(
+            stage=AgentStage.completed,
+            sender="测试工程师",
+            content=f"合并后测试用例共 {merged_case_count} 条",
+            payload=merged_test_cases,
+            progress=0.95,
+        )
 
         # 先保存最终结果，确保导出接口可立即读取
         await session_repository.add_session_result(

@@ -147,16 +147,20 @@ def _merge_test_cases(base: dict, supplement: dict) -> dict:
     return result
 
 
-def run_analysis(documents_text: str) -> AutogenOutputs:
+def run_requirement_analysis(documents_text: str) -> tuple[dict, str]:
+    """执行需求分析阶段.
+
+    Returns:
+        tuple[dict, str]: (需求分析JSON结果, 原始响应内容)
+    """
     if AssistantAgent is None:
         raise RuntimeError("AutoGen 未安装，无法运行真实智能体")
 
     logger.info("=" * 50)
-    logger.info("开始运行 AutoGen 多智能体分析流程")
+    logger.info("阶段 1/4: 需求分析")
     logger.info(f"输入文档长度: {len(documents_text)} 字符")
     logger.info("=" * 50)
 
-    logger.info("阶段 1/4: 需求分析")
     analysis_agent = _agent(
         "你是一位资深需求分析师。请仔细阅读需求文档,识别并提取文档中的所有具体功能模块、业务场景和业务规则。必须基于文档的实际内容进行分析,不要使用泛化的占位符(如'模块1'、'场景1')。输出JSON格式,包含: modules (name为实际模块名, scenarios为具体场景描述[], rules为具体规则描述[]), risks[]。",
         agent_type="analysis"
@@ -173,7 +177,25 @@ def run_analysis(documents_text: str) -> AutogenOutputs:
     analysis_payload = _extract_json(analysis_content)
     logger.info(f"需求分析完成，提取的字段: {list(analysis_payload.keys())}")
 
+    return analysis_payload, analysis_content
+
+
+def run_test_generation(analysis_payload: dict) -> tuple[dict, str]:
+    """执行测试用例生成阶段.
+
+    Args:
+        analysis_payload: 需求分析结果
+
+    Returns:
+        tuple[dict, str]: (测试用例JSON结果, 原始响应内容)
+    """
+    if AssistantAgent is None:
+        raise RuntimeError("AutoGen 未安装，无法运行真实智能体")
+
+    logger.info("=" * 50)
     logger.info("阶段 2/4: 测试用例生成")
+    logger.info("=" * 50)
+
     test_agent = _agent(
         "你是一位资深测试工程师。根据需求分析结果,为每个具体功能模块生成详细的测试用例。测试用例必须针对实际功能点,包含具体的测试步骤和预期结果,不要使用泛化描述。输出JSON格式: {\"modules\": [{\"name\": \"实际模块名\", \"cases\": [{\"id\": \"用例编号\", \"title\": \"具体测试标题\", \"preconditions\": [前置条件], \"steps\": [详细步骤], \"expected\": \"具体预期结果\", \"priority\": \"高/中/低\"}]}]}",
         agent_type="test"
@@ -191,7 +213,25 @@ def run_analysis(documents_text: str) -> AutogenOutputs:
     test_payload = _extract_json(test_content)
     logger.info(f"测试用例生成完成，提取的字段: {list(test_payload.keys())}")
 
+    return test_payload, test_content
+
+
+def run_quality_review(test_payload: dict) -> tuple[dict, str]:
+    """执行质量评审阶段.
+
+    Args:
+        test_payload: 测试用例结果
+
+    Returns:
+        tuple[dict, str]: (评审JSON结果, 原始响应内容)
+    """
+    if AssistantAgent is None:
+        raise RuntimeError("AutoGen 未安装，无法运行真实智能体")
+
+    logger.info("=" * 50)
     logger.info("阶段 3/4: 质量评审")
+    logger.info("=" * 50)
+
     review_agent = _agent(
         "你是质量评审专家。仔细评审测试用例的完整性和准确性,识别覆盖缺陷并提供改进建议。评审必须基于实际功能模块和测试用例的具体内容,指出哪些功能点遗漏了测试。输出JSON格式: {\"coverage\": 覆盖率百分比数值, \"gaps\": [具体缺陷描述], \"recommendations\": [具体改进建议]}",
         agent_type="review"
@@ -208,7 +248,27 @@ def run_analysis(documents_text: str) -> AutogenOutputs:
     review_payload = _extract_json(review_content)
     logger.info(f"质量评审完成，提取的字段: {list(review_payload.keys())}")
 
+    return review_payload, review_content
+
+
+def run_test_completion(analysis_payload: dict, test_payload: dict, review_payload: dict) -> tuple[dict, str]:
+    """执行用例补全阶段.
+
+    Args:
+        analysis_payload: 需求分析结果
+        test_payload: 测试用例结果
+        review_payload: 质量评审结果
+
+    Returns:
+        tuple[dict, str]: (补全用例JSON结果, 原始响应内容)
+    """
+    if AssistantAgent is None:
+        raise RuntimeError("AutoGen 未安装，无法运行真实智能体")
+
+    logger.info("=" * 50)
     logger.info("阶段 4/4: 用例补全")
+    logger.info("=" * 50)
+
     completion_agent = _agent(
         "你是一位测试补全工程师。根据质量评审发现的缺口与建议,补充缺失的测试用例。输出仅包含 JSON 对象: {\"modules\": [{\"name\": \"模块名称\", \"cases\": [{\"id\": \"唯一用例编号\", \"title\": \"具体测试标题\", \"preconditions\": [前置条件], \"steps\": [详细步骤], \"expected\": \"明确的预期结果\", \"priority\": \"P0/P1/P2/P3\"}]}]}。",
         agent_type="test"
@@ -228,6 +288,29 @@ def run_analysis(documents_text: str) -> AutogenOutputs:
     logger.info(
         "补充测试用例生成完成，提取字段: %s",
         list(completion_payload.keys()),
+    )
+
+    return completion_payload, completion_content
+
+
+# 保留原有的run_analysis函数用于兼容性(已弃用)
+def run_analysis(documents_text: str) -> AutogenOutputs:
+    """[已弃用] 一次性执行所有智能体分析.
+
+    建议使用新的分阶段函数: run_requirement_analysis, run_test_generation,
+    run_quality_review, run_test_completion
+    """
+    if AssistantAgent is None:
+        raise RuntimeError("AutoGen 未安装，无法运行真实智能体")
+
+    logger.warning("run_analysis 已弃用，建议使用分阶段函数")
+
+    # 调用新的分阶段函数
+    analysis_payload, analysis_content = run_requirement_analysis(documents_text)
+    test_payload, test_content = run_test_generation(analysis_payload)
+    review_payload, review_content = run_quality_review(test_payload)
+    completion_payload, completion_content = run_test_completion(
+        analysis_payload, test_payload, review_payload
     )
 
     merged_cases = _merge_test_cases(test_payload, completion_payload)
