@@ -78,6 +78,20 @@ def extract_text(path: str | Path, limit: int = 4000, original_name: str | None 
     else:
         suffix = file_path.suffix.lower()
 
+    # 对于图片文件，只使用VL模型，不回退到文本读取
+    if suffix in {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"}:
+        try:
+            text = _read_image_with_vl(file_path, limit)
+            if text:
+                return text
+            # VL模型失败或返回空，返回占位符而不是读取二进制
+            logger.warning(f"VL model failed to extract text from image: {file_path.name}")
+            return f"图片 {original_name or file_path.name} 已上传，等待 VL 模型处理。"
+        except Exception as e:
+            logger.exception(f"Failed to process image {file_path.name}: {e}")
+            return f"图片 {original_name or file_path.name} 处理失败，请检查 VL 模型配置。"
+
+    # 其他文件类型的处理
     try:
         if suffix in {".txt", ".md", ".json", ".log"}:
             return file_path.read_text("utf-8", errors="ignore")[:limit]
@@ -89,13 +103,10 @@ def extract_text(path: str | Path, limit: int = 4000, original_name: str | None 
             text = _read_docx(file_path, limit)
             if text:
                 return text
-        if suffix in {".png", ".jpg", ".jpeg", ".bmp"}:
-            text = _read_image_with_vl(file_path, limit)
-            if text:
-                return text
     except Exception:  # pragma: no cover - fall back to text read
         pass
 
+    # Fallback: 尝试作为文本文件读取（仅用于未知文本格式）
     try:
         return file_path.read_text("utf-8", errors="ignore")[:limit]
     except Exception:  # pragma: no cover - binary fallback
