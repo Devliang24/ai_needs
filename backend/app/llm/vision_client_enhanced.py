@@ -19,6 +19,17 @@ except ImportError:
     logger.warning("dashscope not available, VL image recognition will be disabled")
 
 
+LAYOUT_ANALYSIS_PROMPT = """请识别并提取图片中的所有文字内容，保持原有的排版结构和段落层次。
+
+要求：
+1. 按照从上到下、从左到右的顺序提取文字
+2. 保留标题、序号、列表等结构
+3. 如果有表格，请尽量还原表格的行列结构
+4. 不要对内容进行总结、分析或解读，仅提取原文
+5. 保持原有的换行和段落分隔
+
+请直接输出识别的文字内容，不要添加任何额外的说明或评论。"""
+
 REQUIREMENT_EXTRACTION_PROMPT = """请仔细分析这张图片中的需求文档信息，并提取以下内容：
 
 1. **业务场景**：图片中描述的业务场景或用户故事
@@ -50,17 +61,18 @@ class VLAuthError(VLExtractionError):
 async def extract_requirements_with_retry(
     image_path: str | Path,
     api_key: str | None = None,
-    model: str = "qwen-vl-plus",
+    model: str = "qwen3-vl-flash",
     base_url: str | None = None,
     max_retries: int = 3,
     initial_delay: float = 1.0,
     max_delay: float = 60.0,
     exponential_base: float = 2.0,
     use_cache: bool = True,
-    cache_ttl: int = 7 * 24 * 60 * 60
+    cache_ttl: int = 7 * 24 * 60 * 60,
+    prompt_mode: str = "layout"
 ) -> str:
     """
-    使用VL模型从图片中提取需求信息，带有重试机制和增强的错误处理。
+    使用VL模型从图片中提取文本信息，带有重试机制和增强的错误处理。
 
     Args:
         image_path: 图片文件路径
@@ -73,9 +85,10 @@ async def extract_requirements_with_retry(
         exponential_base: 指数退避基数
         use_cache: 是否使用缓存
         cache_ttl: 缓存时间（秒）
+        prompt_mode: 提示词模式，可选 "layout"（版面分析，仅提取文字）或 "requirement"（需求提取，结构化分析）
 
     Returns:
-        提取的需求文本
+        提取的文本
 
     Raises:
         VLExtractionError: VL模型相关错误
@@ -109,7 +122,15 @@ async def extract_requirements_with_retry(
         except Exception as e:
             logger.warning(f"Cache check failed, proceeding without cache: {e}")
 
-    logger.info(f"Using VL model {model} to extract requirements from image: {image_path}")
+    # 根据模式选择 prompt
+    if prompt_mode == "layout":
+        prompt_text = LAYOUT_ANALYSIS_PROMPT
+        logger.info(f"Using VL model {model} for layout analysis (OCR mode) on: {image_path}")
+    elif prompt_mode == "requirement":
+        prompt_text = REQUIREMENT_EXTRACTION_PROMPT
+        logger.info(f"Using VL model {model} for requirement extraction on: {image_path}")
+    else:
+        raise ValueError(f"Invalid prompt_mode: {prompt_mode}. Must be 'layout' or 'requirement'")
 
     # 构建消息
     messages = [
@@ -117,7 +138,7 @@ async def extract_requirements_with_retry(
             "role": "user",
             "content": [
                 {"image": f"file://{image_path}"},
-                {"text": REQUIREMENT_EXTRACTION_PROMPT}
+                {"text": prompt_text}
             ]
         }
     ]

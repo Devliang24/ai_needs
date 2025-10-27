@@ -56,12 +56,3 @@ export async function exportSessionXmind(sessionId: string, resultVersion?: numb
   );
   return response.data;
 }
-
-export async function exportSessionExcel(sessionId: string, resultVersion?: number): Promise<Blob> {
-  const response = await apiClient.post<Blob>(
-    `/api/sessions/${sessionId}/exports/excel`,
-    { result_version: resultVersion },
-    { responseType: 'blob' }
-  );
-  return response.data;
-}

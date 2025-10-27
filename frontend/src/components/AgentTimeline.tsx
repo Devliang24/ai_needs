@@ -1,5 +1,5 @@
-import { CheckCircleOutlined, EditOutlined } from '@ant-design/icons';
-import { Button, Card, Empty, Input, Space, Spin, Typography } from 'antd';
+import { CheckCircleOutlined } from '@ant-design/icons';
+import { Button, Card, Empty, Spin, Typography } from 'antd';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
@@ -8,8 +8,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../stores/chatStore';
 import type { AgentResult } from '../stores/chatStore';
 import TestCasesView from './TestCasesView';
-import QualityReviewView from './QualityReviewView';
-import SupplementalTestCasesView from './SupplementalTestCasesView';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 
 const isPlainObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -53,6 +52,34 @@ const formatScenarioItem = (value: unknown): string | null => {
     return name || description || null;
   }
   return toPlainText(value);
+};
+
+const formatDurationSeconds = (seconds: number): string => {
+  if (!Number.isFinite(seconds)) {
+    return '0秒';
+  }
+  const value = Math.max(0, seconds);
+  const trim = (num: number, fractionDigits: number) => {
+    const fixed = num.toFixed(fractionDigits);
+    return parseFloat(fixed).toString();
+  };
+
+  if (value < 1) {
+    return `${trim(value, 2)}秒`;
+  }
+
+  if (value < 60) {
+    const digits = value < 10 ? 2 : 1;
+    return `${trim(value, digits)}秒`;
+  }
+
+  const minutes = Math.floor(value / 60);
+  const remainder = value - minutes * 60;
+  if (remainder < 0.01) {
+    return `${minutes}分`;
+  }
+  const digits = remainder < 10 ? 2 : 1;
+  return `${minutes}分${trim(remainder, digits)}秒`;
 };
 
 const buildRequirementMarkdownFromRecord = (data: Record<string, unknown>): string | null => {
@@ -214,15 +241,20 @@ const getRequirementMarkdown = (result: AgentResult): string | null => {
 };
 
 const stageLabels: Record<string, string> = {
-  layout_analysis: '版面分析',
   requirement_analysis: '需求分析',
   test_generation: '用例生成',
   test_completion: '用例补全',
   review: '质量评审',
-  completed: '完成'
+  completed: '合并用例'
 };
 
-const EDITABLE_STAGES = new Set<string>(['layout_analysis', 'requirement_analysis']);
+const STAGE_SEQUENCE = [
+  'requirement_analysis',
+  'test_generation',
+  'review',
+  'test_completion',
+  'completed'
+] as const;
 
 const AgentTimeline: React.FC = () => {
   const {
@@ -231,13 +263,15 @@ const AgentTimeline: React.FC = () => {
     selectedStage,
     currentStage,
     confirmAgentResult,
-    updateAgentResult,
     sendConfirmation,
-    analysisRunning
+    analysisRunning,
+    setSelectedStage,
+    setProgress,
+    updateActivityTime
   } = useAppStore();
-  const [editingResultId, setEditingResultId] = useState<string | null>(null);
-  const [editContent, setEditContent] = useState<string>('');
+  const [pendingStage, setPendingStage] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
+  const isMobile = useMediaQuery('(max-width: 767px)');
 
   // 根据选中的阶段过滤结果
   const filteredResults = useMemo(() => {
@@ -247,73 +281,79 @@ const AgentTimeline: React.FC = () => {
 
   const showStageLoading = useMemo(() => {
     if (!analysisRunning) return false;
-    if (!selectedStage) return false;
-    if (filteredResults.length > 0) return false;
-    return selectedStage === currentStage;
-  }, [analysisRunning, selectedStage, filteredResults.length, currentStage]);
+
+    if (!selectedStage) {
+      // 若未选择具体阶段且仍在分析，默认显示加载
+      return filteredResults.length === 0 && agentResults.length === 0;
+    }
+
+    // 优先检查：如果当前阶段正在等待（pendingStage），始终显示加载
+    if (pendingStage === selectedStage) {
+      return true;
+    }
+
+    // 如果选中的阶段已经有结果，不再显示加载（无论当前执行到哪个阶段）
+    if (filteredResults.length > 0) {
+      const lastResult = filteredResults[filteredResults.length - 1];
+      // 只有当结果还在流式更新中（未完成）时才显示加载
+      return !lastResult.needsConfirmation;
+    }
+
+    const selectedIndex = STAGE_SEQUENCE.indexOf(selectedStage as typeof STAGE_SEQUENCE[number]);
+    const currentIndex = currentStage ? STAGE_SEQUENCE.indexOf(currentStage as typeof STAGE_SEQUENCE[number]) : -1;
+
+    const hasAnyResult = agentResults.length > 0;
+    const isCurrentStageRunning = selectedStage === currentStage;
+    const isInitialRequirementAnalysis =
+      selectedStage === 'requirement_analysis' && (!currentStage || currentStage === 'requirement_analysis');
+    const isFutureStageRunning = currentIndex >= 0 && selectedIndex > currentIndex;
+    const isAwaitingFirstStage = !hasAnyResult && selectedIndex === 0;
+
+    return (
+      isCurrentStageRunning ||
+      isInitialRequirementAnalysis ||
+      isFutureStageRunning ||
+      isAwaitingFirstStage ||
+      (!hasAnyResult && analysisRunning)
+    );
+  }, [analysisRunning, agentResults.length, selectedStage, filteredResults, currentStage, pendingStage]);
 
   const handleConfirm = (resultId: string) => {
     const result = agentResults.find(r => r.id === resultId);
     if (result) {
+      // 更新用户活动时间
+      updateActivityTime();
+
       // 发送WebSocket确认消息
       sendConfirmation(resultId, result.stage, result.payload);
       // 更新本地状态
       confirmAgentResult(resultId);
-    }
-  };
 
-  const handleStartEdit = (result: AgentResult) => {
-    setEditingResultId(result.id);
-    const isRequirementAnalysis = result.stage === 'requirement_analysis';
-    const isLayoutAnalysis = result.stage === 'layout_analysis';
-    const isGeneratedCasesStage =
-      result.stage === 'test_generation' || result.stage === 'test_completion' || result.stage === 'completed';
-
-    const defaultText = (() => {
-      if (typeof result.content === 'string') return result.content;
-      try {
-        return JSON.stringify(result.content, null, 2);
-      } catch {
-        return String(result.content);
+      // 乐观切换到下一个阶段，显示加载态并高亮步骤
+      const currentStageIndex = STAGE_SEQUENCE.findIndex(stage => stage === result.stage);
+      if (currentStageIndex >= 0 && currentStageIndex < STAGE_SEQUENCE.length - 1) {
+        const nextStage = STAGE_SEQUENCE[currentStageIndex + 1];
+        setSelectedStage(nextStage);
+        setProgress(progress, nextStage);
+        setPendingStage(nextStage);
       }
-    })();
-
-    if (isRequirementAnalysis) {
-      const markdown = getRequirementMarkdown(result);
-      setEditContent(markdown || defaultText || '');
-    } else if (isLayoutAnalysis) {
-      setEditContent(defaultText || '');
-    } else if (isGeneratedCasesStage) {
-      // 测试用例编辑payload的JSON格式
-      setEditContent(JSON.stringify(result.payload, null, 2));
-    } else {
-      const content = typeof result.content === 'string' ? result.content : JSON.stringify(result.content, null, 2);
-      setEditContent(content);
     }
   };
 
-  const handleSaveEdit = (resultId: string) => {
-    const result = agentResults.find(r => r.id === resultId);
-    if (result) {
-      // 更新内容
-      const nextPayload: Record<string, unknown> = {
-        ...(result.payload ?? {}),
-        editedContent: editContent
-      };
-      const shouldOverrideContent = EDITABLE_STAGES.has(result.stage);
-      updateAgentResult(resultId, nextPayload, shouldOverrideContent ? editContent : undefined);
+  useEffect(() => {
+    if (!selectedStage) return;
+    // 只有当选中阶段有结果时，才清空 pendingStage
+    if (filteredResults.length > 0) {
+      setPendingStage((prev) => (prev === selectedStage ? null : prev));
     }
-    setEditingResultId(null);
-    setEditContent('');
-  };
-
-  const handleCancelEdit = () => {
-    setEditingResultId(null);
-    setEditContent('');
-  };
+    // 移除 else if 分支，避免过早清空 pendingStage
+  }, [selectedStage, filteredResults.length]);
 
   const renderResultView = (result: AgentResult) => {
-    if (!result.payload || Object.keys(result.payload).length === 0) {
+    const hasTextContent = typeof result.content === 'string' && result.content.trim().length > 0;
+    const hasPayload = !!(result.payload && Object.keys(result.payload).length > 0);
+
+    if (!hasPayload && !hasTextContent) {
       if (result.stage === 'requirement_analysis') {
         return null;
       }
@@ -322,55 +362,48 @@ const AgentTimeline: React.FC = () => {
 
     // 根据不同的智能体阶段渲染不同的视图
     switch (result.stage) {
-      case 'layout_analysis': {
-        const documents = Array.isArray((result.payload as any)?.documents)
-          ? ((result.payload as any).documents as Array<Record<string, unknown>>)
-          : [];
-        if (documents.length === 0) {
-          return <Typography.Text type="secondary">暂无数据</Typography.Text>;
-        }
-        return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {documents.map((doc, index) => {
-              const entry = doc as Record<string, unknown>;
-              const name = typeof entry['name'] === 'string' ? (entry['name'] as string) : `文档 ${index + 1}`;
-              const charCount = typeof entry['char_count'] === 'number' ? (entry['char_count'] as number) : undefined;
-              const lineCount = typeof entry['line_count'] === 'number' ? (entry['line_count'] as number) : undefined;
-              const preview = typeof entry['preview'] === 'string' ? (entry['preview'] as string) : '';
-              const documentId = typeof entry['document_id'] === 'string' ? (entry['document_id'] as string) : `${index}`;
-              const source = entry['source'] === 'vl_model' ? 'VL 模型' : '文本提取';
-              return (
-                <div key={documentId} style={{ padding: 12, background: '#fafafa', borderRadius: 8 }}>
-                  <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
-                    {name}
-                  </Typography.Text>
-                  <Typography.Paragraph style={{ marginBottom: 4 }}>
-                    {charCount != null && (
-                      <span style={{ marginRight: 16 }}>字符数：{charCount}</span>
-                    )}
-                    {lineCount != null && <span>有效段落数：{lineCount}</span>}
-                    <span style={{ marginLeft: 16 }}>识别来源：{source}</span>
-                  </Typography.Paragraph>
-                  <Typography.Paragraph style={{ whiteSpace: 'pre-wrap', marginBottom: 0 }}>
-                    {preview}
-                  </Typography.Paragraph>
-                </div>
-              );
-            })}
-          </div>
-        );
-      }
-      case 'requirement_analysis':
-        // 需求分析师结果以 Markdown 内容为主，结构化视图不再显示
-        return null;
       case 'test_generation':
-        return <TestCasesView data={result.payload} />;
-      case 'review':
-        return <QualityReviewView data={result.payload} />;
+        // 用例生成阶段使用表格视图
+        if (hasPayload && result.payload && typeof result.payload === 'object') {
+          return <TestCasesView data={result.payload} title="测试用例" emptyText="暂无测试用例" />;
+        }
+        return null;
+
       case 'test_completion':
-        return <SupplementalTestCasesView data={result.payload} />;
+        // 用例补全阶段使用表格视图
+        if (hasPayload && result.payload && typeof result.payload === 'object') {
+          return <TestCasesView data={result.payload} title="补充测试用例" emptyText="暂无补充测试用例" />;
+        }
+        return null;
+
+      case 'review':
+        // 质量评审阶段使用结构化卡片视图
+        if (hasPayload && result.payload && typeof result.payload === 'object') {
+          return <ReviewView data={result.payload} />;
+        }
+        // 如果解析失败，降级显示Markdown渲染的完整内容
+        if (hasTextContent) {
+          return (
+            <div className="markdown-body" style={{ padding: '0 16px' }}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                {String(result.content)}
+              </ReactMarkdown>
+            </div>
+          );
+        }
+        return null;
+
       case 'completed':
-        return <TestCasesView data={result.payload} title="最终合并的测试用例" emptyText="暂无测试用例" />;
+        // completed阶段使用表格视图展示合并的测试用例
+        if (hasPayload && result.payload && typeof result.payload === 'object') {
+          return <TestCasesView data={result.payload} title="测试用例（合并）" emptyText="暂无测试用例" />;
+        }
+        return null;
+
+      case 'requirement_analysis':
+        // 需求分析阶段通过 Markdown 预览展示
+        return null;
+
       default:
         return (
           <pre style={{ background: '#f5f5f5', padding: 12, borderRadius: 4, maxHeight: 400, overflow: 'auto' }}>
@@ -380,8 +413,7 @@ const AgentTimeline: React.FC = () => {
     }
   };
 
-  const renderTimelineItem = (result: AgentResult) => {
-    const isEditing = editingResultId === result.id;
+  const renderTimelineItem = (result: AgentResult, index: number, total: number) => {
     const defaultContent =
       typeof result.content === 'string'
         ? result.content
@@ -392,72 +424,59 @@ const AgentTimeline: React.FC = () => {
               return String(result.content);
             }
           })();
+
+    // 只有requirement_analysis阶段使用Markdown，其他阶段使用结构化组件
+    const markdownStages = ['requirement_analysis'];
+
     const isRequirementAnalysis = result.stage === 'requirement_analysis';
     const requirementMarkdown = isRequirementAnalysis ? getRequirementMarkdown(result) : null;
-    const shouldRenderMarkdown = isRequirementAnalysis;
-    const markdownContent = requirementMarkdown ?? defaultContent;
+
+    const candidateMarkdown = requirementMarkdown ?? defaultContent;
+    let normalizedMarkdown =
+      typeof candidateMarkdown === 'string' ? candidateMarkdown.trim() : String(candidateMarkdown);
+    // 移除底部耗时信息（如果存在）
+    normalizedMarkdown = normalizedMarkdown.replace(/>\s*\*\*耗时[：:].*?秒\*\*/g, '').trim();
+    const shouldRenderMarkdown = markdownStages.includes(result.stage) && normalizedMarkdown.length > 0;
+
+    const hasPlainText = typeof defaultContent === 'string' && defaultContent.trim().length > 0;
     const shouldRenderPlainText =
       !shouldRenderMarkdown &&
-      result.stage !== 'layout_analysis' &&
+      hasPlainText &&
       result.stage !== 'test_generation' &&
       result.stage !== 'review' &&
       result.stage !== 'test_completion' &&
       result.stage !== 'completed';
-    const renderedContent = shouldRenderMarkdown ? markdownContent : defaultContent;
+
+    const isSingleResult = total === 1;
+    const itemStyle: React.CSSProperties = {
+      marginBottom: index === total - 1 ? 0 : 24,
+      display: 'flex',
+      flexDirection: 'column',
+      flex: isSingleResult ? 1 : undefined,
+      minHeight: isSingleResult ? '100%' : undefined
+    };
 
     return (
-      <div key={result.id} style={{ marginBottom: 24 }}>
-        {isEditing ? (
-          // 编辑模式
-          <div>
-            <Input.TextArea
-              value={editContent}
-              onChange={(e) => setEditContent(e.target.value)}
-              autoSize={{ minRows: 10, maxRows: 30 }}
-              style={{ marginBottom: 12, fontFamily: 'monospace' }}
-            />
-            <div
-              style={{
-                position: 'sticky',
-                bottom: 0,
-                background: '#fff',
-                padding: '8px 0',
-                textAlign: 'right',
-                borderTop: '1px solid #f0f0f0',
-                boxShadow: '0 -2px 8px rgba(0,0,0,0.04)',
-                zIndex: 1
-              }}
-            >
-              <Space>
-                <Button type="primary" size="small" onClick={() => handleSaveEdit(result.id)}>
-                  保存并重新分析
-                </Button>
-                <Button size="small" onClick={handleCancelEdit}>
-                  取消
-                </Button>
-              </Space>
-            </div>
+      <div key={result.id} style={itemStyle}>
+        {shouldRenderMarkdown ? (
+          <div
+            className="markdown-body"
+            style={{
+              flex: 1,
+              minHeight: 0,
+              borderRadius: 4,
+              padding: '0 16px',
+              overflow: 'visible'
+            }}
+          >
+            <MarkdownPreview content={normalizedMarkdown} />
           </div>
-        ) : (
-          // 显示模式
-          <>
-            {/* 移除每条记录内的编辑入口，仅保留卡片右上角的全局编辑 */}
-              {shouldRenderMarkdown ? (
-                <div className="markdown-body" style={{ lineHeight: 1.6 }}>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-                    {renderedContent}
-                  </ReactMarkdown>
-                </div>
-              ) : shouldRenderPlainText ? (
-                <div style={{ whiteSpace: 'pre-wrap' }}>
-                  {renderedContent}
-                </div>
-              ) : null}
+        ) : shouldRenderPlainText ? (
+          <div style={{ whiteSpace: 'pre-wrap', flex: 1 }}>{defaultContent}</div>
+        ) : null}
 
-            {/* 渲染专门的视图组件 */}
-            {renderResultView(result)}
-          </>
-        )}
+        {/* 渲染专门的视图组件（非流式阶段）*/}
+        {!shouldRenderMarkdown && renderResultView(result)}
       </div>
     );
   };
@@ -467,106 +486,87 @@ const AgentTimeline: React.FC = () => {
   //   endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   // }, [filteredResults]);
 
-  // 计算分析耗时
-  const analysisDuration = useMemo(() => {
+  // 计算阶段耗时
+  const stageDurationSeconds = useMemo(() => {
+    for (let i = filteredResults.length - 1; i >= 0; i -= 1) {
+      const candidate = filteredResults[i].durationSeconds;
+      if (typeof candidate === 'number' && Number.isFinite(candidate)) {
+        return candidate;
+      }
+    }
+    return null;
+  }, [filteredResults]);
+
+  const fallbackDurationText = useMemo(() => {
+    if (stageDurationSeconds != null) return null;
     if (filteredResults.length === 0) return null;
 
-    const firstResult = filteredResults[0];
-    const lastResult = filteredResults[filteredResults.length - 1];
+    let earliestStart = Number.POSITIVE_INFINITY;
+    let latestEnd = 0;
 
-    // 如果只有一个结果或进度未完成，返回null
-    if (filteredResults.length === 1 || progress < 1.0) {
+    for (const result of filteredResults) {
+      const start = typeof result.startedAt === 'number' ? result.startedAt : result.timestamp;
+      if (start < earliestStart) {
+        earliestStart = start;
+      }
+      if (result.timestamp > latestEnd) {
+        latestEnd = result.timestamp;
+      }
+    }
+
+    if (!Number.isFinite(earliestStart) || latestEnd < earliestStart) {
       return null;
     }
 
-    const durationMs = lastResult.timestamp - firstResult.timestamp;
-    const durationSec = Math.floor(durationMs / 1000);
-
-    if (durationSec < 60) {
-      return `${durationSec}秒`;
-    } else {
-      const minutes = Math.floor(durationSec / 60);
-      const seconds = durationSec % 60;
-      return `${minutes}分${seconds}秒`;
+    const durationMs = latestEnd - earliestStart;
+    const durationSec = durationMs / 1000;
+    if (durationSec <= 0) {
+      return '<1秒';
     }
-  }, [filteredResults, progress]);
+    return formatDurationSeconds(durationSec);
+  }, [filteredResults, stageDurationSeconds]);
 
-  // 生成标题：显示为"<阶段>步骤结果预览"，并在右侧显示耗时
+  const stageDurationText = useMemo(() => {
+    if (stageDurationSeconds != null) {
+      return formatDurationSeconds(stageDurationSeconds);
+    }
+    return fallbackDurationText;
+  }, [stageDurationSeconds, fallbackDurationText]);
+
+  // 生成标题：显示为"<阶段>步骤结果预览"
   const cardTitle = useMemo(() => {
     const stageLabel = selectedStage ? (stageLabels[selectedStage] || selectedStage) : '';
     const baseTitle = stageLabel ? `${stageLabel}步骤结果预览` : '步骤结果预览';
-
-    if (analysisDuration) {
-      return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <span>{baseTitle}</span>
-          <Typography.Text type="secondary" style={{ fontSize: 14, fontWeight: 'normal' }}>
-            耗时: {analysisDuration}
-          </Typography.Text>
-        </div>
-      );
-    }
-
     return baseTitle;
-  }, [selectedStage, analysisDuration]);
+  }, [selectedStage]);
 
   // 查找当前需要确认的结果
   const pendingConfirmation = useMemo(() => {
     return filteredResults.find(result => result.needsConfirmation && !result.confirmed);
   }, [filteredResults]);
 
-  // 处于"需求分析"编辑态时隐藏滚动条（仅隐藏，不影响滚动能力）
-  const isEditingEditableStage = useMemo(() => {
-    return selectedStage != null && EDITABLE_STAGES.has(selectedStage) && editingResultId !== null;
-  }, [selectedStage, editingResultId]);
-
   // 卡片右侧操作按钮
   const cardExtra = useMemo(() => {
-    // 在可编辑阶段，取最新一条记录用于全局编辑入口
-    const isEditableStage = selectedStage != null && EDITABLE_STAGES.has(selectedStage);
-    const latestEditable = isEditableStage && filteredResults.length > 0
-      ? filteredResults[filteredResults.length - 1]
-      : null;
-
     return (
-      <Space>
-        {/* 操作按钮 - completed 阶段不显示 */}
-        {pendingConfirmation && pendingConfirmation.stage !== 'completed' && (
-          <>
-            <Button
-              type="primary"
-              size="small"
-              icon={<CheckCircleOutlined />}
-              onClick={() => handleConfirm(pendingConfirmation.id)}
-            >
-              确认,继续下一步
-            </Button>
-            {/* 只在可编辑阶段显示编辑按钮 */}
-            {EDITABLE_STAGES.has(pendingConfirmation.stage) && (
-              <Button
-                size="small"
-                icon={<EditOutlined />}
-                onClick={() => handleStartEdit(pendingConfirmation)}
-              >
-                编辑
-              </Button>
-            )}
-          </>
+      <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 12 }}>
+        {stageDurationText && !isMobile && (
+          <Typography.Text type="secondary" style={{ fontSize: 14 }}>
+            耗时: {stageDurationText}
+          </Typography.Text>
         )}
-
-        {/* 可编辑阶段：在卡片右上角提供全局“编辑”入口 */}
-        {!pendingConfirmation && latestEditable && (
+        {pendingConfirmation && pendingConfirmation.stage !== 'completed' && (
           <Button
-            size="small"
-            icon={<EditOutlined />}
-            onClick={() => handleStartEdit(latestEditable)}
+            type="primary"
+            size={isMobile ? 'middle' : 'small'}
+            icon={<CheckCircleOutlined />}
+            onClick={() => handleConfirm(pendingConfirmation.id)}
           >
-            编辑
+            {isMobile ? '下一步' : '确认,继续下一步'}
           </Button>
         )}
-      </Space>
+      </div>
     );
-  }, [pendingConfirmation, filteredResults, selectedStage]);
+  }, [pendingConfirmation, stageDurationText, isMobile]);
 
   return (
     <>
@@ -576,18 +576,19 @@ const AgentTimeline: React.FC = () => {
         bordered={false}
         style={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column' }}
         bodyStyle={{ flex: 1, minHeight: 0, overflow: 'hidden', padding: 0, display: 'flex', flexDirection: 'column' }}
+        headStyle={{ padding: isMobile ? '12px 16px' : undefined }}
       >
         <div
-          className={isEditingEditableStage ? 'no-scrollbar' : undefined}
           style={{
             flex: 1,
             minHeight: 0,
             overflowY: filteredResults.length === 0 ? 'hidden' : 'auto',
             overflowX: 'hidden',
-            padding: filteredResults.length === 0 ? '0 24px' : '24px',
+            padding: isMobile ? '0 12px' : '0 24px',
             display: 'flex',
             alignItems: filteredResults.length === 0 ? 'center' : 'stretch',
-            justifyContent: filteredResults.length === 0 ? 'center' : 'flex-start'
+            justifyContent: filteredResults.length === 0 ? 'center' : 'flex-start',
+            background: '#fafafa'
           }}
         >
           {filteredResults.length === 0 ? (
@@ -597,8 +598,14 @@ const AgentTimeline: React.FC = () => {
               <Empty description="该阶段暂无执行结果" image={Empty.PRESENTED_IMAGE_SIMPLE} />
             )
           ) : (
-            <div style={{ width: '100%' }}>
-              {filteredResults.map(renderTimelineItem)}
+            <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column' }}>
+              {filteredResults.map((result, index) => renderTimelineItem(result, index, filteredResults.length))}
+              {/* 如果有结果但仍在加载中，显示底部加载提示 */}
+              {showStageLoading && (
+                <div style={{ display: 'flex', justifyContent: 'center', padding: '24px 0' }}>
+                  <Spin tip="继续分析中..." />
+                </div>
+              )}
               <div ref={endRef} />
             </div>
           )}
@@ -609,3 +616,85 @@ const AgentTimeline: React.FC = () => {
 };
 
 export default AgentTimeline;
+
+const MarkdownPreview = React.memo(({ content }: { content: string }) => (
+  <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+    {content}
+  </ReactMarkdown>
+));
+
+MarkdownPreview.displayName = 'MarkdownPreview';
+
+// 质量评审结构化视图组件
+const ReviewView: React.FC<{ data: Record<string, unknown> }> = ({ data }) => {
+  const summary = typeof data.summary === 'string' ? data.summary : '';
+  const defects = Array.isArray(data.defects) ? data.defects : [];
+  const suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
+
+  const hasContent = summary || defects.length > 0 || suggestions.length > 0;
+
+  if (!hasContent) {
+    return <Typography.Text type="secondary">暂无评审数据</Typography.Text>;
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {summary && (
+        <Card
+          size="small"
+          title="评审摘要"
+          style={{ background: '#fff', border: '1px solid #e8e8e8' }}
+        >
+          {/* 使用ReactMarkdown渲染摘要，支持加粗、列表等格式 */}
+          <div className="markdown-body" style={{ fontSize: 14 }}>
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {summary}
+            </ReactMarkdown>
+          </div>
+        </Card>
+      )}
+
+      {defects.length > 0 && (
+        <Card
+          size="small"
+          title={`发现的缺陷 (${defects.length})`}
+          style={{ background: '#fff', border: '1px solid #e8e8e8' }}
+        >
+          <ul style={{ margin: 0, paddingLeft: 20 }}>
+            {defects.map((item, index) => (
+              <li key={index} style={{ marginBottom: 8 }}>
+                {/* 每个列表项也支持Markdown渲染 */}
+                <div className="markdown-body" style={{ fontSize: 14, display: 'inline' }}>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {String(item)}
+                  </ReactMarkdown>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
+      {suggestions.length > 0 && (
+        <Card
+          size="small"
+          title={`改进建议 (${suggestions.length})`}
+          style={{ background: '#fff', border: '1px solid #e8e8e8' }}
+        >
+          <ul style={{ margin: 0, paddingLeft: 20 }}>
+            {suggestions.map((item, index) => (
+              <li key={index} style={{ marginBottom: 8 }}>
+                {/* 每个列表项也支持Markdown渲染 */}
+                <div className="markdown-body" style={{ fontSize: 14, display: 'inline' }}>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {String(item)}
+                  </ReactMarkdown>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+    </div>
+  );
+};

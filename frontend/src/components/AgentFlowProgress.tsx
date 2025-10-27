@@ -1,6 +1,7 @@
 import { Steps, Card } from 'antd';
 import React, { useMemo } from 'react';
 import type { AgentResult } from '../stores/chatStore';
+import { useMediaQuery } from '../hooks/useMediaQuery';
 
 interface AgentFlowProgressProps {
   currentStage: string | null;
@@ -17,22 +18,23 @@ interface FlowStage {
 }
 
 const FLOW_STAGES: FlowStage[] = [
-  { key: 'layout_analysis', title: '版面分析' },
   { key: 'requirement_analysis', title: '需求分析' },
   { key: 'test_generation', title: '用例生成' },
   { key: 'review', title: '质量评审' },
   { key: 'test_completion', title: '用例补全' },
-  { key: 'completed', title: '完成' }
+  { key: 'completed', title: '合并用例' }
 ];
 
 const AgentFlowProgress: React.FC<AgentFlowProgressProps> = ({
   currentStage,
   progress,
   agentResults,
-  isConnecting,
+  isConnecting: _isConnecting,
   selectedStage,
   onStageClick
 }) => {
+  const isMobile = useMediaQuery('(max-width: 767px)');
+
   // 计算当前执行步骤索引
   const currentStepIndex = useMemo(() => {
     // 如果整体完成，直接高亮最后一步
@@ -47,52 +49,100 @@ const AgentFlowProgress: React.FC<AgentFlowProgressProps> = ({
     return index >= 0 ? index : -1;
   }, [currentStage, progress]);
 
-  // 计算选中步骤的索引（用于高亮显示）
+  // 计算阶段完成状态
+  const maxCompletedIndex = useMemo(() => {
+    let completedIndex = -1;
+    for (let i = 0; i < FLOW_STAGES.length; i += 1) {
+      const stage = FLOW_STAGES[i];
+      const stageResults = agentResults.filter(result => result.stage === stage.key);
+      if (stageResults.length === 0) {
+        break;
+      }
+      const latestResult = stageResults[stageResults.length - 1];
+      if (latestResult.needsConfirmation) {
+        break;
+      }
+      completedIndex = i;
+    }
+    return completedIndex;
+  }, [agentResults]);
+
   const selectedStepIndex = useMemo(() => {
     if (!selectedStage) return -1;
     return FLOW_STAGES.findIndex(stage => stage.key === selectedStage);
   }, [selectedStage]);
 
-  // 为每个步骤生成状态
+  const allowedMaxIndex = useMemo(() => {
+    const indices = [maxCompletedIndex, currentStepIndex, selectedStepIndex]
+      .filter(index => index != null && index >= 0);
+    if (indices.length === 0) {
+      return 0;
+    }
+    return Math.max(...indices);
+  }, [currentStepIndex, maxCompletedIndex, selectedStepIndex]);
+
   const stepsItems = useMemo(() => {
     return FLOW_STAGES.map((stage, index) => {
-      let status: 'wait' | 'process' | 'finish' | 'error' = 'wait';
-
-      // 检查该阶段是否有结果
       const hasResult = agentResults.some(result => result.stage === stage.key);
-
-      if (hasResult) {
-        // 有结果,显示为完成状态
-        status = 'finish';
-      } else if (index === currentStepIndex) {
-        // 当前执行的步骤
-        // 判断条件: 1) 是当前阶段 2) 进度在进行中(0 < progress < 1.0)
-        // 这样可以确保在智能体执行期间(15-30秒)持续显示加载状态
-        if (isConnecting || (progress > 0 && progress < 1.0)) {
-          status = 'process';  // 显示加载动画
-        }
-      } else if (index < currentStepIndex && !hasResult) {
-        // 已经跳过但没有结果的步骤(理论上不应该出现,但作为保护)
-        status = 'finish';
-      } else {
-        // 等待中的步骤
-        status = 'wait';
-      }
-
-      return {
-        title: stage.title,
-        status
-      };
+      const status: 'wait' | 'finish' = hasResult || index < currentStepIndex ? 'finish' : 'wait';
+      const disabled = index > allowedMaxIndex;
+      return { title: stage.title, status, disabled };
     });
-  }, [agentResults, currentStepIndex, isConnecting, progress]);
+  }, [agentResults, currentStepIndex, allowedMaxIndex]);
 
 
   // 处理步骤点击
   const handleStepChange = (current: number) => {
     const stage = FLOW_STAGES[current];
-    if (stage) {
+    if (stage && current <= allowedMaxIndex) {
       onStageClick(stage.key);
     }
+  };
+
+  // 移动端自定义步骤显示组件
+  const renderMobileSteps = () => {
+    return (
+      <div style={{
+        display: 'flex',
+        gap: 8,
+        flexWrap: 'wrap',
+        justifyContent: 'space-between'
+      }}>
+        {FLOW_STAGES.map((stage, index) => {
+          const hasResult = agentResults.some(result => result.stage === stage.key);
+          const isCompleted = hasResult || index < currentStepIndex;
+          const isCurrent = index === (selectedStepIndex >= 0 ? selectedStepIndex : currentStepIndex);
+          const disabled = index > allowedMaxIndex;
+
+          return (
+            <div
+              key={stage.key}
+              onClick={() => !disabled && handleStepChange(index)}
+              style={{
+                flex: '1 1 auto',
+                minWidth: '18%',
+                padding: '6px 8px',
+                textAlign: 'center',
+                borderRadius: 4,
+                fontSize: 12,
+                fontWeight: isCompleted ? 600 : 400,
+                color: isCompleted ? '#1890ff' : disabled ? '#d9d9d9' : '#595959',
+                backgroundColor: isCurrent ? '#e6f7ff' : 'transparent',
+                border: isCurrent ? '1px solid #1890ff' : '1px solid #f0f0f0',
+                cursor: disabled ? 'not-allowed' : 'pointer',
+                opacity: disabled ? 0.5 : 1,
+                transition: 'all 0.3s ease',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis'
+              }}
+            >
+              {stage.title}
+            </div>
+          );
+        })}
+      </div>
+    );
   };
 
   return (
@@ -100,14 +150,20 @@ const AgentFlowProgress: React.FC<AgentFlowProgressProps> = ({
       size="small"
       bordered={false}
       style={{ background: '#fafafa' }}
+      bodyStyle={{ padding: isMobile ? '12px' : '16px' }}
     >
-      <Steps
-        current={selectedStepIndex >= 0 ? selectedStepIndex : currentStepIndex >= 0 ? currentStepIndex : -1}
-        items={stepsItems}
-        onChange={handleStepChange}
-        responsive={false}
-        style={{ cursor: 'pointer', fontSize: '16px' }}
-      />
+      {isMobile ? (
+        renderMobileSteps()
+      ) : (
+        <Steps
+          current={selectedStepIndex >= 0 ? selectedStepIndex : currentStepIndex >= 0 ? currentStepIndex : -1}
+          items={stepsItems}
+          onChange={handleStepChange}
+          responsive={false}
+          size="default"
+          style={{ cursor: 'pointer', fontSize: '16px' }}
+        />
+      )}
     </Card>
   );
 };

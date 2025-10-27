@@ -37,7 +37,6 @@ session_documents = Table(
 class AgentStage(str, enum.Enum):
     """Stages executed by the agent workflow."""
 
-    layout_analysis = "layout_analysis"
     requirement_analysis = "requirement_analysis"
     confirmation = "confirmation"
     test_generation = "test_generation"

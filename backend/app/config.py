@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     app_port: int = Field(8000, description="FastAPI port binding")
     debug: bool = Field(False, description="Enable debug mode")
 
-    llm_provider: Literal["qwen", "deepseek", "openai"] = Field(
+    llm_provider: Literal["qwen", "openai"] = Field(
         "qwen", description="Active large language model provider"
     )
     qwen_api_key: str | None = Field(default=None, alias="QWEN_API_KEY")
@@ -24,23 +24,36 @@ class Settings(BaseSettings):
 
     # Vision-Language 模型配置（用于图片识别）
     vl_enabled: bool = Field(default=True, alias="VL_ENABLED", description="启用 VL 模型进行图片识别")
-    # MultiModalConversation 使用 qwen-vl-* 系列；使用 qwen-vl-plus 模型（更快更稳定）
-    vl_model: str = Field(default="qwen-vl-plus", alias="VL_MODEL", description="VL 模型名称")
+    # MultiModalConversation 使用 qwen-vl-* 系列；使用 qwen3-vl-flash 模型（更快更经济）
+    vl_model: str = Field(default="qwen3-vl-flash", alias="VL_MODEL", description="VL 模型名称（图片识别）")
     vl_api_key: str | None = Field(default=None, alias="VL_API_KEY", description="VL 模型 API Key，默认使用 QWEN_API_KEY")
     vl_base_url: str | None = Field(default=None, alias="VL_BASE_URL", description="VL 模型 base URL")
 
+    # PDF文档专用OCR模型配置
+    pdf_ocr_enabled: bool = Field(default=True, alias="PDF_OCR_ENABLED", description="对PDF使用专用OCR模型")
+    pdf_ocr_model: str = Field(default="qwen-vl-ocr-2025-08-28", alias="PDF_OCR_MODEL", description="PDF专用OCR模型")
+    pdf_ocr_api_key: str | None = Field(default=None, alias="PDF_OCR_API_KEY", description="PDF OCR模型 API Key，默认使用 QWEN_API_KEY")
+    pdf_ocr_base_url: str | None = Field(default=None, alias="PDF_OCR_BASE_URL", description="PDF OCR模型 base URL")
+
     # 需求分析师专用配置
-    analysis_agent_model: str = Field(default="qwen-max", alias="ANALYSIS_AGENT_MODEL")
+    analysis_agent_model: str = Field(default="qwen3-vl-flash", alias="ANALYSIS_AGENT_MODEL")
     analysis_agent_api_key: str | None = Field(default=None, alias="ANALYSIS_AGENT_API_KEY")
     analysis_agent_base_url: str | None = Field(default=None, alias="ANALYSIS_AGENT_BASE_URL")
 
+    # 多模态分析配置
+    analysis_multimodal_enabled: bool = Field(
+        default=False,
+        alias="ANALYSIS_MULTIMODAL_ENABLED",
+        description="启用需求分析智能体的多模态能力（直接处理图片，保留视觉信息）"
+    )
+
     # 测试工程师专用配置
-    test_agent_model: str = Field(default="qwen-plus", alias="TEST_AGENT_MODEL")
+    test_agent_model: str = Field(default="qwen3-next-80b-a3b-instruct", alias="TEST_AGENT_MODEL")
     test_agent_api_key: str | None = Field(default=None, alias="TEST_AGENT_API_KEY")
     test_agent_base_url: str | None = Field(default=None, alias="TEST_AGENT_BASE_URL")
 
     # 质量评审专家专用配置
-    review_agent_model: str = Field(default="qwen-plus", alias="REVIEW_AGENT_MODEL")
+    review_agent_model: str = Field(default="qwen3-next-80b-a3b-instruct", alias="REVIEW_AGENT_MODEL")
     review_agent_api_key: str | None = Field(default=None, alias="REVIEW_AGENT_API_KEY")
     review_agent_base_url: str | None = Field(default=None, alias="REVIEW_AGENT_BASE_URL")
 
@@ -137,6 +150,15 @@ class Settings(BaseSettings):
             "model": self.vl_model,
             "api_key": self.vl_api_key or self.qwen_api_key,
             "base_url": self.vl_base_url or self.qwen_base_url,
+        }
+
+    def get_pdf_ocr_config(self) -> dict:
+        """获取 PDF OCR 模型配置."""
+        return {
+            "enabled": self.pdf_ocr_enabled,
+            "model": self.pdf_ocr_model,
+            "api_key": self.pdf_ocr_api_key or self.qwen_api_key,
+            "base_url": self.pdf_ocr_base_url or self.qwen_base_url,
         }
 
 

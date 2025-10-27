@@ -12,9 +12,11 @@ export interface AgentResult {
   payload?: Record<string, unknown>;
   progress: number;
   timestamp: number;
+  startedAt?: number;
   needsConfirmation?: boolean;  // 是否需要确认
   confirmed?: boolean;           // 是否已确认
   editable?: boolean;            // 是否可编辑
+  durationSeconds?: number | null;
 }
 
 export interface DocumentHistoryEntry {
@@ -68,6 +70,7 @@ interface AppState {
   selectedStage: string | null;
   websocket: WebSocket | null;
   analysisRunning: boolean;
+  lastActivityTime: number;
   addDocument: (document: Document) => void;
   removeDocument: (documentId: string) => void;
   clearDocuments: () => void;
@@ -82,10 +85,13 @@ interface AppState {
   sendConfirmation: (resultId: string, stage: string, payload?: Record<string, unknown>) => void;
   confirmAgentResult: (resultId: string) => void;
   updateAgentResult: (resultId: string, payload: Record<string, unknown>, contentOverride?: string) => void;
+  updateActivityTime: () => void;
+  clearAnalysisResults: () => void;
   resetAnalysis: () => void;
   reset: () => void;
   documentHistories: Record<string, DocumentHistoryEntry[]>;
   addDocumentHistory: (documentId: string, entry: DocumentHistoryEntry) => void;
+  clearDocumentHistory: (documentId: string) => void;
   setAgentResults: (results: AgentResult[]) => void;
   setAnalysisRunning: (value: boolean) => void;
 }
@@ -100,10 +106,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   isConnecting: false,
   progress: 0,
   currentStage: null,
-  selectedStage: 'layout_analysis',
+  selectedStage: 'requirement_analysis',
   websocket: null,
   documentHistories: initialDocumentHistories,
   analysisRunning: false,
+  lastActivityTime: 0,
   addDocument: (document) =>
     set((state) => ({
       documents: state.documents.some((d) => d.id === document.id)
@@ -127,16 +134,21 @@ export const useAppStore = create<AppState>((set, get) => ({
     }),
   setSession: (session) => set({ session }),
   addAgentResult: (result) =>
-    set((state) => ({
-      agentResults: [
-        ...state.agentResults,
-        {
-          ...result,
-          id: nanoid(),
-          timestamp: Date.now()
-        }
-      ]
-    })),
+    set((state) => {
+      const now = Date.now();
+      return {
+        agentResults: [
+          ...state.agentResults,
+          {
+            ...result,
+            id: nanoid(),
+            timestamp: now,
+            startedAt: now,
+            durationSeconds: result.durationSeconds ?? null
+          }
+        ]
+      };
+    }),
   appendAgentResult: (result) =>
     set((state) => {
       const results = state.agentResults;
@@ -180,12 +192,17 @@ export const useAppStore = create<AppState>((set, get) => ({
           mergedContent = `${prevText}\n${newText}`;
         }
 
+        const now = Date.now();
         const merged = {
           ...target,
           content: mergedContent,
           payload: result.payload ?? target.payload,
           progress: typeof result.progress === 'number' ? result.progress : target.progress,
-          needsConfirmation: result.needsConfirmation ?? target.needsConfirmation
+          // needsConfirmation: 优先使用true值（一旦设为true就保持true）
+          needsConfirmation: result.needsConfirmation === true || target.needsConfirmation === true,
+          timestamp: now,
+          startedAt: target.startedAt ?? target.timestamp,
+          durationSeconds: typeof result.durationSeconds === 'number' ? result.durationSeconds : target.durationSeconds ?? null
         } as AgentResult;
 
         const next = results.slice();
@@ -194,13 +211,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       // 否则按新消息追加
+      const now = Date.now();
       return {
         agentResults: [
           ...results,
           {
             ...result,
             id: nanoid(),
-            timestamp: Date.now()
+            timestamp: now,
+            startedAt: now,
+            durationSeconds: result.durationSeconds ?? null
           }
         ]
       };
@@ -250,11 +270,26 @@ export const useAppStore = create<AppState>((set, get) => ({
               payload,
               ...(contentOverride !== undefined ? { content: contentOverride } : {}),
               confirmed: true,
-              needsConfirmation: false
+              needsConfirmation: false,
+              durationSeconds: r.durationSeconds ?? null
             }
           : r
       )
     })),
+  updateActivityTime: () => set({ lastActivityTime: Date.now() }),
+  clearAnalysisResults: () =>
+    set({
+      session: null,
+      agentResults: [],
+      systemMessages: [],
+      isConnecting: false,
+      websocket: null,
+      // 注意：不重置以下状态，保持加载状态和进度
+      // - analysisRunning: 保持加载状态
+      // - progress: 保持进度显示
+      // - currentStage: 保持当前阶段，用于加载判断
+      // - selectedStage: 保持选中阶段
+    }),
   resetAnalysis: () =>
     set({
       session: null,
@@ -262,7 +297,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       systemMessages: [],
       progress: 0,
       currentStage: null,
-      selectedStage: 'layout_analysis',
+      selectedStage: 'requirement_analysis',
       isConnecting: false,
       websocket: null,
       analysisRunning: false
@@ -277,7 +312,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         systemMessages: [],
         progress: 0,
         currentStage: null,
-        selectedStage: 'layout_analysis',
+        selectedStage: 'requirement_analysis',
         isConnecting: false,
         websocket: null,
         documentHistories: {},
@@ -295,6 +330,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       };
       persistDocumentHistories(nextHistories);
       return { documentHistories: nextHistories };
+    }),
+  clearDocumentHistory: (documentId) =>
+    set((state) => {
+      if (!(documentId in state.documentHistories)) {
+        return {};
+      }
+      const { [documentId]: _removed, ...rest } = state.documentHistories;
+      persistDocumentHistories(rest);
+      return { documentHistories: rest };
     }),
   setAgentResults: (results) => set({ agentResults: results }),
   setAnalysisRunning: (value) => set({ analysisRunning: value })

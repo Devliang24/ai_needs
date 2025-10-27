@@ -90,3 +90,166 @@ body {
   overflow: hidden;
   text-align: center;
 }
+
+/* ========== 移动端适配样式 ========== */
+@media (max-width: 767px) {
+  /* 全局调整 */
+  body {
+    font-size: 14px;
+  }
+
+  /* 按钮触摸优化 - 最小尺寸 44x44px */
+  .ant-btn {
+    min-height: 44px;
+    padding: 8px 16px;
+  }
+
+  .ant-btn-sm {
+    min-height: 40px;
+    padding: 6px 12px;
+  }
+
+  .ant-btn-icon-only {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  /* List 组件紧凑化 */
+  .ant-list-item {
+    padding: 8px 12px;
+    flex-wrap: nowrap !important; /* 强制不换行 */
+  }
+
+  .ant-list-item-action {
+    margin-left: 8px;
+    flex-shrink: 0 !important; /* 防止按钮区域被压缩 */
+  }
+
+  /* List.Item.Meta 允许收缩 */
+  .ant-list-item-meta {
+    flex-shrink: 1 !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+  }
+
+  .ant-list-item-meta-content {
+    min-width: 0 !important;
+    overflow: hidden !important;
+  }
+
+  /* Card 组件间距优化 */
+  .ant-card-head {
+    padding: 12px 16px;
+    min-height: auto;
+  }
+
+  .ant-card-body {
+    padding: 16px;
+  }
+
+  .ant-card-small > .ant-card-head {
+    padding: 8px 12px;
+  }
+
+  .ant-card-small > .ant-card-body {
+    padding: 12px;
+  }
+
+  /* Steps 组件移动端优化 */
+  .ant-steps-item-title {
+    font-size: 13px !important;
+    line-height: 1.4 !important;
+  }
+
+  .ant-steps-item-description {
+    font-size: 12px !important;
+  }
+
+  /* Table 组件移动端优化 */
+  .ant-table {
+    font-size: 13px;
+  }
+
+  .ant-table-thead > tr > th,
+  .ant-table-tbody > tr > td {
+    padding: 10px 8px;
+  }
+
+  .ant-table-cell {
+    word-break: break-word;
+  }
+
+  /* Upload 组件移动端优化 */
+  .file-upload-dragger.ant-upload-drag {
+    min-height: 100px;
+    padding: 12px;
+  }
+
+  /* Markdown 内容移动端优化 */
+  .markdown-body {
+    font-size: 13px;
+    line-height: 1.6;
+  }
+
+  .markdown-body h1 {
+    font-size: 20px;
+  }
+
+  .markdown-body h2 {
+    font-size: 18px;
+  }
+
+  .markdown-body h3 {
+    font-size: 16px;
+  }
+
+  .markdown-body h4 {
+    font-size: 15px;
+  }
+
+  .markdown-body pre {
+    padding: 8px;
+    font-size: 12px;
+    overflow-x: auto;
+  }
+
+  .markdown-body code {
+    font-size: 12px;
+  }
+
+  /* Radio 按钮触摸优化 */
+  .ant-radio-wrapper {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  /* 消息提示移动端优化 */
+  .ant-message {
+    font-size: 14px;
+  }
+
+  /* Modal 移动端优化 */
+  .ant-modal {
+    max-width: calc(100vw - 32px);
+    margin: 16px auto;
+  }
+
+  .ant-modal-body {
+    padding: 16px;
+  }
+
+  /* Empty 组件移动端优化 */
+  .ant-empty {
+    margin: 16px 0;
+  }
+
+  .ant-empty-description {
+    font-size: 13px;
+  }
+
+  /* Spin 加载组件移动端优化 */
+  .ant-spin-text {
+    font-size: 13px;
+  }
+}
